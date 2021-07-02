@@ -1,6 +1,8 @@
 import os
 import base64
+import binascii
 import re
+import sys
 
 XML_TEMPLATE = """<!DOCTYPE synthv1>
 <preset name="{NAME}" version="0.9.22.32git.e83414.dirty [develop]">
@@ -162,16 +164,42 @@ def read_rpl(rpl_filename):
     preset_list = {}
 
     # Open RPL file, then extract preset name and Base64-decoded content
-    rpl_content = open(rpl_filename, "rb").read().decode("utf-8")
+    try:
+        rpl_content = open(rpl_filename, "rb").read().decode("utf-8")
+    except FileNotFoundError as err:
+        print("ERROR: Cannot find RPL file '{filename}'".format(
+            filename=rpl_filename))
+        sys.exit(4)
+    except Exception as err:
+        print("ERROR: Cannot read RPL file '{filename}'\n\t{err_message}".format(
+            filename=rpl_filename, err_message=err.args[0]))
+        sys.exit(16)
+
     raw_preset_list = re.findall(
         r"<PRESET\s+`(.*)`([\w=+\s]+)>", rpl_content, re.M)
 
     # Decode all preset contents
     for preset in raw_preset_list:
         raw_preset_base64 = preset[1].replace(" ", "")
-        preset_data = base64.b64decode(raw_preset_base64).decode("utf-8")
 
-        preset_list[preset[0]] = preset_data
+        try:
+            preset_data = base64.b64decode(raw_preset_base64).decode("utf-8")
+        except binascii.Error as base64_error:         # Base64 parse error
+            print("ERROR: Base64 decode error at preset '{preset_name}' ({message})".format(preset_name=preset[0],
+                                                                                            message=base64_error.args[0]))
+            print("\tYour RPL file may have corrupted!")
+            sys.exit(2)
+
+        # Consider if user omitted preset name
+        if preset[0].strip() == "":
+            fallback_preset_name = "unknown_{hash}".format(
+                hash=str(hash(preset_data)))
+            print("warning: Empty preset name found. Renaming as {new_name}".format(
+                new_name=fallback_preset_name))
+
+            preset_list[fallback_preset_name] = preset_data
+        else:
+            preset_list[preset[0]] = preset_data
 
     return preset_list
 
@@ -195,9 +223,16 @@ def preset_list_to_xml(preset_list):
     def render_template(name, **preset_content_dict):
         # Remove quotation marks, or Qt won't recognize my XML file
         if re.search(r'"', name):
+            print("warning: Omitting this preset name's quotation marks ↓\n\t{preset_name}".format(
+                preset_name=name))
             name = name.replace('"', '')
 
-        return XML_TEMPLATE.format(**preset_content_dict, NAME=name)
+        try:
+            return XML_TEMPLATE.format(**preset_content_dict, NAME=name)
+        except KeyError as key_err:
+            print("ERROR: Insufficient preset data detected.\n\tOn preset: '{preset_name}'\n\tPreset entry: '{entry}'\nMake sure this is SynthV1's RPL file.".format(
+                preset_name=name, entry=key_err.args[0]))
+            sys.exit(3)
 
     # Convert all preset data into XML, storing them into a dictionary
     for p in preset_list.keys():
