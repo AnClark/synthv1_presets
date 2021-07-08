@@ -191,6 +191,9 @@ def read_rpl(rpl_filename):
     raw_preset_list = re.findall(
         r"<PRESET\s+`(.*)`([\w=+\s]+)>", rpl_content, re.M)
 
+    if len(raw_preset_list) <= 0:
+        Logger().error("Cannot detect any presets.", exit_number=5)
+
     # Decode all preset contents
     for preset in raw_preset_list:
         raw_preset_base64 = preset[1].replace(" ", "")
@@ -213,6 +216,34 @@ def read_rpl(rpl_filename):
             preset_list[preset[0]] = preset_data
 
     return preset_list
+
+
+def check_rpl_type(rpl_filename):
+    # Open RPL file
+    try:
+        rpl_content = open(rpl_filename, "rb").read().decode("utf-8")
+    except FileNotFoundError as err:
+        Logger().error(message="Cannot find RPL file '{filename}'".format(
+            filename=rpl_filename), exit_number=1)
+
+    except Exception as err:
+        Logger().error(message="Cannot read RPL file '{filename}'\n\t{err_message}".format(
+            filename=rpl_filename, err_message=err.args[0]), exit_number=16)
+
+    preset_name_result = re.findall(
+        r'<REAPER_PRESET_LIBRARY\s+"([^"]+)"', rpl_content)
+    if not preset_name_result:
+        Logger().error("Cannot detect preset type. Manually specify with -t if needed.", exit_number=9)
+
+    if re.search(r"synthv1", preset_name_result[0], re.I):
+        Logger().info("Detected SynthV1 preset")
+        return "SynthV1"
+    elif re.search(r"padthv1", preset_name_result[0], re.I):
+        Logger().info("Detected PadthV1 preset")
+        return "PadthV1"
+    else:
+        Logger().warning("Unknown preset type. Assume SynthV1.")
+        return "SynthV1"
 
 
 def preset_list_to_xml(preset_list, type="SynthV1"):
@@ -285,7 +316,7 @@ def preset_list_to_xml(preset_list, type="SynthV1"):
     return preset_xml_collection
 
 
-def rpl_to_xml(rpl_filename, target_path, overwrite_all=False, type="SynthV1"):
+def rpl_to_xml(rpl_filename, target_path, overwrite_all=False, type="auto"):
     # Filter out illeagal filename characters
     def preprocess_filename(filename):
         if re.search(r'[\\"]', filename):
@@ -293,8 +324,16 @@ def rpl_to_xml(rpl_filename, target_path, overwrite_all=False, type="SynthV1"):
 
         return filename
 
-    Logger().info("Processing REAPER user preset bank for Vee-One Suite\n\tType: {type}\n\tFile Name: {filename}".format(
-        type=type, filename=rpl_filename))
+    # Auto determine RPL type if needed
+    type_assume_mode = ""
+    if type == "auto" or type.strip() == "":
+        type = check_rpl_type(rpl_filename)
+        type_assume_mode = "(auto detect)"
+    else:
+        type_assume_mode = "(manually assume)"
+
+    Logger().info("Processing REAPER user preset bank for Vee-One Suite\n\tType: {type} {type_assume_mode}\n\tFile Name: {filename}".format(
+        type=type, filename=rpl_filename, type_assume_mode=type_assume_mode))
 
     # Parse and convert RPL file internally
     preset_list = read_rpl(rpl_filename)
@@ -344,8 +383,8 @@ def main():
                         help="Where to put convert presets")
     parser.add_argument("-f", "--overwrite",
                         help="Remove all files in target path first (usually for distribution)", action="store_true")
-    parser.add_argument("-t", "--type", type=str, default="synthv1",
-                        help="Specify which Vee-One product you want to convert for. Case insensitive.\nChoices are: synthv1, padthv1")
+    parser.add_argument("-t", "--type", type=str, default='auto', choices=('auto', 'synthv1', 'padthv1'),
+                        help="Specify which Vee-One product you want to convert for. Case sensitive.\nChoices are: auto, synthv1, padthv1\nLeave blank for auto detection")
     args = parser.parse_args()
 
     rpl_to_xml(type=args.type, rpl_filename=args.rpl_file,
